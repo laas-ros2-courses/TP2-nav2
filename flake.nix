@@ -11,6 +11,8 @@
         rosDistros = [ "jazzy" ];
         rosShellDistro = "jazzy";
 
+        extraPackages = [ "evince" ];
+
         extraRosPackages = [
           "turtlebot4-description"
           "turtlebot4-navigation"
@@ -19,6 +21,8 @@
           "slam-toolbox"
           "rviz2"
           "teleop-twist-keyboard"
+          "tf2-tools"
+          "rqt-tf-tree"
 
           "navigation2"
           "nav2-simple-commander"
