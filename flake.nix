@@ -23,6 +23,7 @@
           "teleop-twist-keyboard"
           "tf2-tools"
           "rqt-tf-tree"
+          "rqt-graph"
 
           "navigation2"
           "nav2-simple-commander"
