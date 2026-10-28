@@ -120,4 +120,124 @@ soit en temps réel :
 ros2 run rqt_tf_tree rqt_tf_tree
 ```
 
+**5. Configurer la fusion de capteurs (`robot_localization`).**
+
+Créer `yahboom_rosmaster_localization/config/ekf.yaml` :
+```bash
+cd src/yahboom_rosmaster/yahboom_rosmaster_localization/
+mkdir config
+touch config/ekf.yaml
+```
+Y configurer le nœud `ekf_filter_node` du paquet `robot_localization` pour fusionner :
+- `/mecanum_drive_controller/odom` (odométrie des roues)
+- `/imu/data` (IMU)
+
+Points à régler dans le fichier :
+- `frequency`, `two_d_mode: true` (le robot se déplace sur un plan)
+- les frames (REP 105) : `map_frame`, `odom_frame`, `base_link_frame: base_footprint`, `world_frame: odom`
+- `odom0`/`odom0_config` et `imu0`/`imu0_config` : quels axes de chaque capteur sont fusionnés
+
+Référence officielle pour récupérer un fichier de base : [guide Nav2 "Smoothing Odometry using Robot Localization"](https://docs.nav2.org/jazzy/configuration_and_development/first_time_robot_setup_guide/odom/setup_robot_localization/).
+
+**6. Créer le launch file de l'EKF.**
+
+Créer `yahboom_rosmaster_localization/launch/ekf_gazebo.launch.py` :
+```bash
+cd src/yahboom_rosmaster/yahboom_rosmaster_localization/
+mkdir launch
+touch launch/ekf_gazebo.launch.py
+```
+```python
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    pkg_share = get_package_share_directory('yahboom_rosmaster_localization')
+    ekf_config = os.path.join(pkg_share, 'config', 'ekf.yaml')
+
+    use_sim_time = LaunchConfiguration('use_sim_time')
+
+    declare_use_sim_time = DeclareLaunchArgument(
+        name='use_sim_time',
+        default_value='true',
+        description='Use simulation (Gazebo) clock if true'
+    )
+
+    ekf_node = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        output='screen',
+        parameters=[ekf_config, {'use_sim_time': use_sim_time}]
+    )
+
+    return LaunchDescription([
+        declare_use_sim_time,
+        ekf_node
+    ])
+```
+
+**7. Mettre à jour `CMakeLists.txt`.**
+
+Dans `yahboom_rosmaster_localization/CMakeLists.txt`, installer les dossiers `config` et `launch` :
+```cmake
+install(
+  DIRECTORY config launch
+  DESTINATION share/${PROJECT_NAME}
+)
+```
+
+**8. Builder et lancer.**
+
+```bash
+colcon build
+source install/setup.bash
+```
+
+Dans un terminal, lancer le robot dans Gazebo (comme à l'étape 4) :
+```bash
+bash src/yahboom_rosmaster/yahboom_rosmaster_bringup/scripts/rosmaster_x3_gazebo.sh
+```
+
+Dans un deuxième terminal, lancer l'EKF :
+```bash
+ros2 launch yahboom_rosmaster_localization ekf_gazebo.launch.py
+```
+
+> ⚠️ Les contrôleurs ROS 2 (`joint_state_broadcaster`, `mecanum_drive_controller`) ne démarrent que **~25 secondes** après le lancement de Gazebo (délai codé dans `load_ros2_controllers.launch.py`). Les topics `/joint_states` et `/mecanum_drive_controller/odom` n'existeront pas avant — c'est normal, pas un bug.
+
+**9. Vérifier la fusion de capteurs.**
+
+```bash
+ros2 topic list
+ros2 topic info /imu/data -v
+ros2 topic echo /imu/data
+
+ros2 topic info /mecanum_drive_controller/odom -v
+ros2 topic echo /mecanum_drive_controller/odom
+
+ros2 topic echo /odometry/filtered
+```
+
+Vérifier que l'horodatage de ces topics correspond au temps simulation (`ros2 topic echo /clock`).
+
+Déplacer le robot manuellement pour observer la fusion :
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+
+Inspecter la transformée calculée par l'EKF, le nœud, le graphe et l'arbre TF :
+```bash
+ros2 run tf2_ros tf2_echo odom base_footprint
+ros2 node info /ekf_filter_node
+rqt_graph
+ros2 run tf2_tools view_frames
+```
+
 
