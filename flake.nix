@@ -24,6 +24,7 @@
           "tf2-tools"
           "rqt-tf-tree"
           "rqt-graph"
+          "rqt-plot"
 
           "navigation2"
           "nav2-simple-commander"

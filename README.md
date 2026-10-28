@@ -183,7 +183,29 @@ def generate_launch_description():
     ])
 ```
 
-**7. Mettre à jour `CMakeLists.txt`.**
+**7. Créer un script combiné (robot + EKF).**
+
+Plutôt que de lancer le robot et l'EKF dans deux terminaux séparés, on peut copier le script existant et y ajouter l'EKF.
+
+Copier `rosmaster_x3_gazebo.sh` :
+```bash
+cd src/yahboom_rosmaster/yahboom_rosmaster_bringup/scripts/
+cp rosmaster_x3_gazebo.sh rosmaster_x3_gazebo_ekf.sh
+```
+
+Dans la copie, juste après le bloc d'ajustement de la caméra et avant `wait`, ajouter le lancement de l'EKF en arrière-plan (temps que les contrôleurs, et donc les topics d'odométrie, soient disponibles) :
+```bash
+echo "Adjusting camera position..."
+gz service -s /gui/move_to/pose --reqtype gz.msgs.GUICamera --reptype gz.msgs.Boolean --timeout 2000 --req "pose: {position: {x: 0.0, y: -2.0, z: 2.0} orientation: {x: -0.2706, y: 0.2706, z: 0.6533, w: 0.6533}}"
+
+echo "Launching EKF (robot_localization)..."
+ros2 launch yahboom_rosmaster_localization ekf_gazebo.launch.py &
+
+# Keep the script running until Ctrl+C
+wait
+```
+
+**8. Mettre à jour `CMakeLists.txt`.**
 
 Dans `yahboom_rosmaster_localization/CMakeLists.txt`, installer les dossiers `config` et `launch` :
 ```cmake
@@ -193,26 +215,33 @@ install(
 )
 ```
 
-**8. Builder et lancer.**
+**9. Builder et lancer.**
 
 ```bash
 colcon build
 source install/setup.bash
 ```
 
-Dans un terminal, lancer le robot dans Gazebo (comme à l'étape 4) :
+Avec le script combiné :
+```bash
+bash src/yahboom_rosmaster/yahboom_rosmaster_bringup/scripts/rosmaster_x3_gazebo_ekf.sh
+```
+
+Ou, comme avant, dans deux terminaux séparés.
+
+Terminal 1 :
 ```bash
 bash src/yahboom_rosmaster/yahboom_rosmaster_bringup/scripts/rosmaster_x3_gazebo.sh
 ```
 
-Dans un deuxième terminal, lancer l'EKF :
+Terminal 2 :
 ```bash
 ros2 launch yahboom_rosmaster_localization ekf_gazebo.launch.py
 ```
 
 > ⚠️ Les contrôleurs ROS 2 (`joint_state_broadcaster`, `mecanum_drive_controller`) ne démarrent que **~25 secondes** après le lancement de Gazebo (délai codé dans `load_ros2_controllers.launch.py`). Les topics `/joint_states` et `/mecanum_drive_controller/odom` n'existeront pas avant — c'est normal, pas un bug.
 
-**9. Vérifier la fusion de capteurs.**
+**10. Vérifier la fusion de capteurs.**
 
 ```bash
 ros2 topic list
@@ -229,8 +258,22 @@ Vérifier que l'horodatage de ces topics correspond au temps simulation (`ros2 t
 
 Déplacer le robot manuellement pour observer la fusion :
 ```bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
+    -p stamped:=true \
+    -r /cmd_vel:=/mecanum_drive_controller/cmd_vel
 ```
+> Le `mecanum_drive_controller` attend un `geometry_msgs/msg/TwistStamped` sur `/mecanum_drive_controller/cmd_vel`, pas un `Twist` classique sur `/cmd_vel` — d'où le remapping et le paramètre `stamped:=true`.
+
+Pendant que tu déplaces le robot, comparer en temps réel la vitesse angulaire (yaw) mesurée par chaque capteur et celle calculée par l'EKF — c'est la preuve visuelle que la fusion fonctionne :
+```bash
+ros2 run rqt_plot rqt_plot
+```
+> Ajouter les topics un par un dans l'interface (champ **Topic** en haut + bouton **+** vert) plutôt qu'en argument de la commande — `rqt_plot` est peu fiable pour ajouter plusieurs topics directement au lancement.
+
+Ajouter successivement :
+- `/mecanum_drive_controller/odom/twist/twist/angular/z`
+- `/imu/data/angular_velocity/z`
+- `/odometry/filtered/twist/twist/angular/z`
 
 Inspecter la transformée calculée par l'EKF, le nœud, le graphe et l'arbre TF :
 ```bash
