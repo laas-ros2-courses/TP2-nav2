@@ -283,4 +283,18 @@ rqt_graph
 ros2 run tf2_tools view_frames
 ```
 
+**11. Visualiser les données des capteurs dans RViz.**
+
+Lancer le robot (si ce n'est pas déjà fait) :
+```bash
+bash src/yahboom_rosmaster/yahboom_rosmaster_bringup/scripts/rosmaster_x3_gazebo_ekf.sh
+```
+
+Dans RViz :
+- Champ **Fixed Frame** (panneau Displays) : mettre `odom`.
+- **Add** → onglet **By topic** → sélectionner `/scan` (`sensor_msgs/LaserScan`). Dans les propriétés de l'affichage, mettre la **Reliability Policy** sur `Best Effort` (sinon RViz n'affiche rien si des paquets du LIDAR sont perdus/retardés), et la **Size** sur `0.1` pour mieux voir les points.
+- **Add** → onglet **By topic** → sélectionner `/imu/data` (`sensor_msgs/Imu`).
+
+Déplacer le robot (teleop, étape 10) et observer en temps réel : le scan laser qui correspond aux obstacles dans Gazebo, et l'orientation/accélération de l'IMU qui bouge avec le robot.
+
 
