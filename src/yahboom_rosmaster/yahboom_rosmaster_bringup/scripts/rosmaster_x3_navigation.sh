@@ -11,11 +11,13 @@ cleanup() {
 # Set up cleanup trap
 trap 'cleanup' SIGINT SIGTERM
 
-# Check if SLAM argument is provided
-if [ "$1" = "slam" ]; then
-    SLAM_ARG="slam:=True"
-else
+# Default: build the map live with SLAM (no saved map yet).
+# Pass "localize" to navigate on the map already saved in
+# yahboom_rosmaster_navigation/maps/ instead (via map_saver_cli).
+if [ "$1" = "localize" ]; then
     SLAM_ARG="slam:=False"
+else
+    SLAM_ARG="slam:=True"
 fi
 
 # For cafe.world -> z:=0.20
@@ -24,7 +26,6 @@ fi
 
 echo "Launching Gazebo simulation with Nav2..."
 ros2 launch yahboom_rosmaster_bringup rosmaster_x3_navigation.launch.py \
-    enable_odom_tf:=false \
     headless:=False \
     load_controllers:=true \
     world_file:=cafe.world \
@@ -37,8 +38,7 @@ ros2 launch yahboom_rosmaster_bringup rosmaster_x3_navigation.launch.py \
     roll:=0.0 \
     pitch:=0.0 \
     yaw:=0.0 \
-    "$SLAM_ARG" \
-    map:=/home/ubuntu/ros2_ws/src/yahboom_rosmaster/yahboom_rosmaster_navigation/maps/cafe_world_map.yaml &
+    "$SLAM_ARG" &
 
 echo "Waiting 25 seconds for simulation to initialize..."
 sleep 25
