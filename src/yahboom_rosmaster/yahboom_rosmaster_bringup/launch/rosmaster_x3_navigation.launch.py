@@ -2,10 +2,10 @@
 """
 Launch Nav2 for the Yahboom ROSMASTER X3 robot in Gazebo.
 
-This launch file sets up a complete ROS 2 navigation environment.
-
-:author: Addison Sears-Collins
-:date: December 10, 2024
+Starts Gazebo, the EKF (robot_localization), the Nav2 stack (SLAM or
+localization on a saved map) and the cmd_vel -> TwistStamped relay, all
+chained together via proper launch dependencies instead of a sleep in a
+bash script.
 """
 
 from launch import LaunchDescription
@@ -24,23 +24,20 @@ def generate_launch_description():
         LaunchDescription: A complete launch description for the robot.
     """
     # Constants for paths to different packages
-    package_name_docking = 'yahboom_rosmaster_docking'
+    package_name_bringup = 'yahboom_rosmaster_bringup'
     package_name_gazebo = 'yahboom_rosmaster_gazebo'
     package_name_localization = 'yahboom_rosmaster_localization'
     package_name_navigation = 'yahboom_rosmaster_navigation'
 
     # Launch and config file paths
-    apriltag_launch_file_path = 'launch/apriltag_dock_pose_publisher.launch.py'
     gazebo_launch_file_path = 'launch/yahboom_rosmaster.gazebo.launch.py'
     ekf_launch_file_path = 'launch/ekf_gazebo.launch.py'
     ekf_config_file_path = 'config/ekf.yaml'
     map_file_path = 'maps/cafe_world_map.yaml'
-    nav2_params_path = 'config/rosmaster_x3_nav2_default_params.yaml'
-    rviz_config_file_path = 'rviz/nav2_default_view.rviz'
+    nav2_params_path = 'config/nav2_params.yaml'
 
     # Set the path to different packages
-    pkg_share_docking = FindPackageShare(
-        package=package_name_docking).find(package_name_docking)
+    pkg_share_bringup = FindPackageShare(package=package_name_bringup).find(package_name_bringup)
     pkg_share_gazebo = FindPackageShare(package=package_name_gazebo).find(package_name_gazebo)
     pkg_share_localization = FindPackageShare(
         package=package_name_localization).find(package_name_localization)
@@ -48,12 +45,11 @@ def generate_launch_description():
         package=package_name_navigation).find(package_name_navigation)
 
     # Set default paths
-    default_apriltag_launch_path = PathJoinSubstitution(
-        [pkg_share_docking, apriltag_launch_file_path])
     default_gazebo_launch_path = PathJoinSubstitution([pkg_share_gazebo, gazebo_launch_file_path])
-    default_ekf_launch_path = PathJoinSubstitution([pkg_share_localization, ekf_launch_file_path])
+    # The EKF launch file lives in this same package (bringup handles every combined
+    # launch/script for this TP); only its config stays in yahboom_rosmaster_localization.
+    default_ekf_launch_path = PathJoinSubstitution([pkg_share_bringup, ekf_launch_file_path])
     default_ekf_config_path = PathJoinSubstitution([pkg_share_localization, ekf_config_file_path])
-    default_rviz_config_path = PathJoinSubstitution([pkg_share_navigation, rviz_config_file_path])
 
     nav2_dir = FindPackageShare(package='nav2_bringup').find('nav2_bringup')
     nav2_launch_dir = PathJoinSubstitution([nav2_dir, 'launch'])
@@ -63,7 +59,6 @@ def generate_launch_description():
     # Launch configuration variables
     # Config and launch files
     autostart = LaunchConfiguration('autostart')
-    camera_namespace = LaunchConfiguration('camera_namespace')
     enable_odom_tf = LaunchConfiguration('enable_odom_tf')
     ekf_config_file = LaunchConfiguration('ekf_config_file')
     ekf_launch_file = LaunchConfiguration('ekf_launch_file')
@@ -71,7 +66,6 @@ def generate_launch_description():
     map_yaml_file = LaunchConfiguration('map')
     namespace = LaunchConfiguration('namespace')
     nav2_params_file = LaunchConfiguration('nav2_params_file')
-    rviz_config_file = LaunchConfiguration('rviz_config_file')
     slam = LaunchConfiguration('slam')
     use_composition = LaunchConfiguration('use_composition')
     use_namespace = LaunchConfiguration('use_namespace')
@@ -105,11 +99,6 @@ def generate_launch_description():
         default_value='true',
         description='Automatically startup the Nav2 stack')
 
-    declare_camera_namespace_cmd = DeclareLaunchArgument(
-        name='camera_namespace',
-        default_value='cam_1',
-        description='Namespace for the camera')
-
     declare_ekf_config_file_cmd = DeclareLaunchArgument(
         name='ekf_config_file',
         default_value=default_ekf_config_path,
@@ -122,9 +111,13 @@ def generate_launch_description():
 
     declare_enable_odom_tf_cmd = DeclareLaunchArgument(
         name='enable_odom_tf',
-        default_value='true',
+        default_value='false',
         choices=['true', 'false'],
-        description='Whether to enable odometry transform broadcasting via ROS 2 Control')
+        description=(
+            'Whether to enable odometry transform broadcasting via ROS 2 Control. '
+            "False here: the EKF (publish_tf: true in ekf.yaml) is the one broadcasting "
+            "odom -> base_footprint, not the controller."
+        ))
 
     declare_gazebo_launch_file_cmd = DeclareLaunchArgument(
         name='gazebo_launch_file',
@@ -134,7 +127,7 @@ def generate_launch_description():
     declare_map_yaml_cmd = DeclareLaunchArgument(
         name='map',
         default_value=static_map_path,
-        description='Full path to map file to load')
+        description='Full path to map file to load (unused while slam:=True)')
 
     declare_namespace_cmd = DeclareLaunchArgument(
         name='namespace',
@@ -146,11 +139,6 @@ def generate_launch_description():
         default_value=nav2_params_file_path,
         description='Full path to the ROS2 parameters file to use for navigation nodes')
 
-    declare_rviz_config_file_cmd = DeclareLaunchArgument(
-        name='rviz_config_file',
-        default_value=default_rviz_config_path,
-        description='Full path to the RVIZ config file to use')
-
     # Robot configuration
     declare_robot_name_cmd = DeclareLaunchArgument(
         name='robot_name',
@@ -159,8 +147,12 @@ def generate_launch_description():
 
     declare_slam_cmd = DeclareLaunchArgument(
         name='slam',
-        default_value='False',
-        description='Whether to run SLAM')
+        default_value='True',
+        choices=['True', 'False'],
+        description=(
+            'Whether to run SLAM. nav2_bringup evaluates this value as Python code '
+            "(PythonExpression), hence the capitalized True/False rather than true/false."
+        ))
 
     declare_use_namespace_cmd = DeclareLaunchArgument(
         name='use_namespace',
@@ -222,8 +214,12 @@ def generate_launch_description():
 
     declare_use_composition_cmd = DeclareLaunchArgument(
         name='use_composition',
-        default_value='True',
-        description='Whether to use composed bringup')
+        default_value='False',
+        choices=['True', 'False'],
+        description=(
+            'Whether to use composed bringup. False by default: True triggers a known '
+            'pluginlib/class_loader race condition when loading Nav2 plugins in composition.'
+        ))
 
     declare_use_respawn_cmd = DeclareLaunchArgument(
         name='use_respawn',
@@ -251,25 +247,11 @@ def generate_launch_description():
         description='Use simulation (Gazebo) clock if true')
 
     # Specify the actions
-    start_apriltag_dock_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([default_apriltag_launch_path]),
-        launch_arguments={
-            'use_sim_time': use_sim_time,
-            'camera_namespace': camera_namespace
-        }.items()
-    )
-
-    start_assisted_teleop_cmd = Node(
-        package='yahboom_rosmaster_navigation',
-        executable='assisted_teleoperation.py',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
-    )
 
     # Start the node that relays /cmd_vel to /mecanum_drive_controller/cmd_vel
     start_cmd_vel_relay_cmd = Node(
         package='yahboom_rosmaster_navigation',
-        executable='cmd_vel_relay',
+        executable='cmd_vel_relay.py',
         name='cmd_vel_relay',
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}]
@@ -293,7 +275,6 @@ def generate_launch_description():
             'jsp_gui': jsp_gui,
             'load_controllers': load_controllers,
             'robot_name': robot_name,
-            'rviz_config_file': rviz_config_file,
             'use_rviz': use_rviz,
             'use_gazebo': use_gazebo,
             'use_robot_state_pub': use_robot_state_pub,
@@ -306,14 +287,6 @@ def generate_launch_description():
             'pitch': pitch,
             'yaw': yaw
         }.items()
-    )
-
-    # Start the node that receives goal poses and sends the robot there
-    start_nav_to_pose_cmd = Node(
-        package='yahboom_rosmaster_navigation',
-        executable='nav_to_pose.py',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
     )
 
     # Launch the ROS 2 Navigation Stack
@@ -339,7 +312,6 @@ def generate_launch_description():
     # Add all launch arguments
     # Config and launch files
     ld.add_action(declare_autostart_cmd)
-    ld.add_action(declare_camera_namespace_cmd)
     ld.add_action(declare_enable_odom_tf_cmd)
     ld.add_action(declare_ekf_config_file_cmd)
     ld.add_action(declare_ekf_launch_file_cmd)
@@ -347,7 +319,6 @@ def generate_launch_description():
     ld.add_action(declare_map_yaml_cmd)
     ld.add_action(declare_namespace_cmd)
     ld.add_action(declare_nav2_params_file_cmd)
-    ld.add_action(declare_rviz_config_file_cmd)
     ld.add_action(declare_slam_cmd)
     ld.add_action(declare_use_composition_cmd)
     ld.add_action(declare_use_namespace_cmd)
@@ -377,12 +348,9 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
 
     # Add any actions
-    ld.add_action(start_apriltag_dock_cmd)
-    ld.add_action(start_assisted_teleop_cmd)
     ld.add_action(start_cmd_vel_relay_cmd)
     ld.add_action(start_ekf_cmd)
     ld.add_action(start_gazebo_cmd)
-    ld.add_action(start_nav_to_pose_cmd)
     ld.add_action(start_ros2_navigation_cmd)
 
     return ld
