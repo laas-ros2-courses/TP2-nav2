@@ -286,9 +286,80 @@ docking_server:
       plugin: "opennav_docking::SimpleChargingDock"
 ```
 
-**5. Lancer le SLAM et explorer l'environnement.**
+**5. Créer le nœud relais `cmd_vel` → `TwistStamped`.**
 
-Avec `slam_toolbox` configuré et les blocs problématiques nettoyés, lancer la simulation en mode SLAM — c'est le comportement par défaut du script, pas besoin d'argument :
+Nav2 (`controller_server`, `velocity_smoother`) publie les commandes de vitesse en `geometry_msgs/Twist` classique sur `/cmd_vel`, sans horodatage. Le `mecanum_drive_controller` attend un `geometry_msgs/TwistStamped` (même contrainte que pour le téléop, section *Localisation et fusion de capteurs*) — mais contrairement à `teleop_twist_keyboard`, Nav2 n'a pas de paramètre `stamped` intégré. Il faut donc un petit nœud qui convertit l'un vers l'autre.
+
+Ce nœud ne sert vraiment qu'en navigation autonome (tant qu'on reste en SLAM pur avec le téléop, personne ne lui envoie rien) — mais `rosmaster_x3_navigation.launch.py` inclut ce nœud **sans condition**, qu'on soit en mode SLAM ou navigation. Il doit donc déjà exister avant même le premier lancement ci-dessous, sinon `ros2 launch` échoue sur ce nœud (`libexec directory ... does not exist`) — même logique que pour le fix `docking_server` de l'étape précédente.
+
+Créer le fichier :
+```bash
+cd src/yahboom_rosmaster/yahboom_rosmaster_navigation/
+mkdir scripts
+touch scripts/cmd_vel_relay.py
+chmod +x scripts/cmd_vel_relay.py
+```
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist, TwistStamped
+
+
+class CmdVelRelay(Node):
+    def __init__(self):
+        super().__init__('cmd_vel_relay')
+        self.pub = self.create_publisher(TwistStamped, '/mecanum_drive_controller/cmd_vel', 10)
+        self.sub = self.create_subscription(Twist, 'cmd_vel', self.callback, 10)
+
+    def callback(self, msg: Twist):
+        out = TwistStamped()
+        out.header.stamp = self.get_clock().now().to_msg()
+        out.twist = msg
+        self.pub.publish(out)
+
+
+def main():
+    rclpy.init()
+    rclpy.spin(CmdVelRelay())
+
+
+if __name__ == '__main__':
+    main()
+```
+
+**6. Installer le script et les dossiers de config.**
+
+```cmake
+install(PROGRAMS
+  scripts/cmd_vel_relay.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY config maps
+  DESTINATION share/${PROJECT_NAME}
+)
+```
+Ce deuxième bloc (même principe que pour `yahboom_rosmaster_localization`, section *Localisation et fusion de capteurs*) est nécessaire pour que `nav2_params.yaml` et les cartes sauvegardées (étape suivante) soient accessibles une fois le paquet installé.
+
+**7. Builder et tester le relais.**
+
+```bash
+colcon build
+source install/setup.bash
+ros2 run yahboom_rosmaster_navigation cmd_vel_relay.py
+```
+
+Dans un autre terminal, publier un `Twist` de test sur `/cmd_vel` et vérifier qu'il ressort bien en `TwistStamped` sur `/mecanum_drive_controller/cmd_vel` :
+```bash
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}}" --once
+ros2 topic echo /mecanum_drive_controller/cmd_vel
+```
+
+**8. Lancer le SLAM et explorer l'environnement.**
+
+Avec `slam_toolbox` configuré, les blocs problématiques nettoyés et le relais en place, lancer la simulation en mode SLAM — c'est le comportement par défaut du script, pas besoin d'argument :
 
 ```bash
 colcon build
@@ -305,13 +376,17 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
     -r /cmd_vel:=/mecanum_drive_controller/cmd_vel
 ```
 
-**6. Sauvegarder la carte.**
+**9. Sauvegarder la carte.**
 
 Une fois l'environnement bien exploré, sauvegarder la carte construite par `slam_toolbox` :
 ```bash
-ros2 run nav2_map_server map_saver_cli -f src/yahboom_rosmaster/yahboom_rosmaster_navigation/maps/cafe_world_map
+ros2 run nav2_map_server map_saver_cli -f src/yahboom_rosmaster/yahboom_rosmaster_navigation/maps/cafe_world_map --ros-args -p save_map_timeout:=10.0
 ```
+> Le timeout par défaut de `map_saver_cli` (2 s) est souvent trop court et fait échouer la sauvegarde (`Failed to spin map subscription`) même quand `/map` est bien publié — d'où le `save_map_timeout:=10.0`.
+
 Ça produit `cafe_world_map.yaml` (métadonnées) et `cafe_world_map.pgm` (l'image de la carte) dans `maps/` — exactement le fichier que `rosmaster_x3_navigation.launch.py` charge par défaut (argument `map`) quand on lance en mode `localize` (section *Navigation autonome*).
+
+> ⚠️ Comme pour `nav2_params.yaml`, ce dossier `maps/` n'est copié dans `install/` (d'où le launch file charge la carte) qu'au prochain `colcon build` — sans ça, lancer en mode `localize` juste après avoir sauvegardé échoue (`Failed to load map yaml file`). Les builds des étapes suivantes s'en chargent naturellement, mais si tu testes `localize` directement après avoir sauvegardé la carte, pense à rebuilder avant.
 
 ## Navigation autonome
 
@@ -395,76 +470,7 @@ Ces quatre blocs restent identiques au fichier par défaut officiel de Nav2 :
 - **`behavior_server`** : gère les comportements de récupération (`Spin`, `BackUp`, `DriveOnHeading`, `Wait`, `AssistedTeleop`) en cas d'échec de la navigation. Tourner sur place ou reculer reste valide pour un robot holonome.
 - **`collision_monitor`** : surveille les collisions en continu à partir de l'empreinte réelle du robot (`footprint_topic`) et du LIDAR, pas d'une zone directionnelle fixe — ça fonctionne donc indépendamment du type de déplacement.
 
-**7. Créer le nœud relais `cmd_vel` → `TwistStamped`.**
-
-Nav2 (`controller_server`, `velocity_smoother`) publie les commandes de vitesse en `geometry_msgs/Twist` classique sur `/cmd_vel`, sans horodatage. Le `mecanum_drive_controller` attend un `geometry_msgs/TwistStamped` (même contrainte que pour le téléop, section *Localisation et fusion de capteurs*) — mais contrairement à `teleop_twist_keyboard`, Nav2 n'a pas de paramètre `stamped` intégré. Il faut donc un petit nœud qui convertit l'un vers l'autre.
-
-Créer le fichier :
-```bash
-cd src/yahboom_rosmaster/yahboom_rosmaster_navigation/
-mkdir scripts
-touch scripts/cmd_vel_relay.py
-chmod +x scripts/cmd_vel_relay.py
-```
-```python
-#!/usr/bin/env python3
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import Twist, TwistStamped
-
-
-class CmdVelRelay(Node):
-    def __init__(self):
-        super().__init__('cmd_vel_relay')
-        self.pub = self.create_publisher(TwistStamped, '/mecanum_drive_controller/cmd_vel', 10)
-        self.sub = self.create_subscription(Twist, 'cmd_vel', self.callback, 10)
-
-    def callback(self, msg: Twist):
-        out = TwistStamped()
-        out.header.stamp = self.get_clock().now().to_msg()
-        out.twist = msg
-        self.pub.publish(out)
-
-
-def main():
-    rclpy.init()
-    rclpy.spin(CmdVelRelay())
-
-
-if __name__ == '__main__':
-    main()
-```
-
-**8. Installer le script et les dossiers de config.**
-
-```cmake
-install(PROGRAMS
-  scripts/cmd_vel_relay.py
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-install(
-  DIRECTORY config maps
-  DESTINATION share/${PROJECT_NAME}
-)
-```
-Ce deuxième bloc (même principe que pour `yahboom_rosmaster_localization`, section *Localisation et fusion de capteurs*) est nécessaire pour que `nav2_params.yaml` soit accessible une fois le paquet installé — sans lui, le launch file combiné ci-dessous (*Lancer la navigation complète*) ne trouvera pas le fichier.
-
-**9. Builder et tester le relais.**
-
-```bash
-colcon build
-source install/setup.bash
-ros2 run yahboom_rosmaster_navigation cmd_vel_relay.py
-```
-
-Dans un autre terminal, publier un `Twist` de test sur `/cmd_vel` et vérifier qu'il ressort bien en `TwistStamped` sur `/mecanum_drive_controller/cmd_vel` :
-```bash
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}}" --once
-ros2 topic echo /mecanum_drive_controller/cmd_vel
-```
-
-**10. Lancer la navigation complète.**
+**7. Lancer la navigation complète.**
 
 Même principe que pour la localisation (section *Localisation et fusion de capteurs*) : le launch file et le script qui combinent tout (Gazebo + EKF + Nav2 + relais `cmd_vel`) vivent dans `yahboom_rosmaster_bringup`, déjà fournis — `launch/rosmaster_x3_navigation.launch.py` et `scripts/rosmaster_x3_navigation.sh` — expliqués en live. Son cœur est simple : trois `IncludeLaunchDescription` (Gazebo, EKF, Nav2) plus le nœud du relais, chacun ajouté à la même `LaunchDescription` — pas de `sleep` nécessaire, chaque nœud attend ses propres dépendances via la découverte ROS (même logique que pour la localisation).
 
@@ -482,7 +488,7 @@ source install/setup.bash
 bash src/yahboom_rosmaster/yahboom_rosmaster_bringup/scripts/rosmaster_x3_navigation.sh localize
 ```
 
-**11. Configurer RViz pour visualiser la navigation.**
+**8. Configurer RViz pour visualiser la navigation.**
 
 Le launch file réutilise la configuration RViz de base (`yahboom_rosmaster_gazebo_sim.rviz`, celle des sections précédentes) : elle affiche le robot et les capteurs, mais n'a aucun affichage Nav2 (costmaps, particules AMCL, bouton d'envoi d'objectif). Le tutoriel original d'Addison Sears-Collins référence son propre fichier dédié (`rviz/nav2_default_view.rviz`), mais ce fichier n'a jamais été inclus dans le dépôt public — on ajoute donc les affichages à la main :
 
@@ -493,7 +499,7 @@ Le launch file réutilise la configuration RViz de base (`yahboom_rosmaster_gaze
 - En mode `localize` (`amcl` actif, pas de SLAM) uniquement : **Add** → onglet **By topic** → `/particle_cloud` (`nav2_msgs/ParticleCloud`) : affiche le nuage de particules de l'AMCL.
 - **Tools** (barre d'outils en haut de la vue 3D) → **+** → **Nav2 Goal** : permet de cliquer sur la carte pour envoyer un objectif de navigation ponctuel (alternative au panneau Navigation 2).
 
-**12. Initialiser la position du robot (2D Pose Estimate).**
+**9. Initialiser la position du robot (2D Pose Estimate).**
 
 En mode `localize`, le robot ne connaît pas sa position de départ sur la carte chargée : `amcl` a besoin d'un point de départ pour commencer à affiner son estimation (en mode SLAM, pas besoin — `slam_toolbox` localise le robot dès le début).
 
@@ -503,7 +509,7 @@ En mode `localize`, le robot ne connaît pas sa position de départ sur la carte
 
 > À refaire chaque fois qu'on relance la navigation en mode `localize`, ou si le robot est déplacé manuellement dans Gazebo.
 
-**13. Envoyer un objectif de navigation (Nav2 Goal).**
+**10. Envoyer un objectif de navigation (Nav2 Goal).**
 
 Une fois la pose initiale fixée (en mode `localize`) — ou directement en mode SLAM, puisque `slam_toolbox` localise déjà le robot :
 
@@ -511,7 +517,7 @@ Une fois la pose initiale fixée (en mode `localize`) — ou directement en mode
 - Cliquer sur la carte à l'endroit visé, maintenir le clic gauche et faire glisser pour fixer l'orientation d'arrivée, puis relâcher.
 - `bt_navigator` fait planifier un chemin par `planner_server` en évitant les obstacles (costmaps), puis `controller_server` et le relais `cmd_vel` le suivent — observable en direct dans RViz (chemin planifié, costmaps, position qui avance).
 
-**14. Envoyer une séquence de waypoints.**
+**11. Envoyer une séquence de waypoints.**
 
 Pour faire suivre une série de points au lieu d'un seul objectif :
 
