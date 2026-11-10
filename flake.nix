@@ -1,5 +1,5 @@
 {
-  description = "TP2 INSA : navigation Nav2 (doc officielle générique) sur TurtleBot4";
+  description = "TP2 INSA : navigation Nav2 (doc officielle générique) sur Yahboom ROSMASTER X3";
 
   inputs.nix.url = "github:gepetto/nix";
 
@@ -14,9 +14,6 @@
         extraPackages = [ "evince" ];
 
         extraRosPackages = [
-          "turtlebot4-description"
-          "turtlebot4-navigation"
-          "turtlebot4-simulator"
           "nav2-bringup"
           "slam-toolbox"
           "rviz2"
