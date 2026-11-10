@@ -45,6 +45,8 @@
           "ros2-control-test-assets"
           "ament-lint-auto"
           "ament-lint-common"
+          "ament-cmake-gmock"
+          "hardware-interface-testing"
         ];
       }
     );
